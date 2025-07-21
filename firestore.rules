@@ -1,0 +1,43 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users collection - users can read/write their own data
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Listings collection - more permissive rules for testing
+    match /listings/{listingId} {
+      // Anyone can read listings (no auth required for browsing)
+      allow read: if true;
+      
+      // Allow authenticated users to create listings with basic validation
+      allow create: if request.auth != null 
+        && request.auth.uid == request.resource.data.user_id
+        && request.resource.data.keys().hasAll(['user_id', 'title', 'category', 'description', 'price_per_day', 'location', 'is_active', 'is_rented']);
+      
+      // Only the owner can update/delete their listings
+      allow update, delete: if request.auth != null 
+        && request.auth.uid == resource.data.user_id;
+    }
+    
+    // Messages collection - only participants can access
+    match /messages/{messageId} {
+      allow read, write: if request.auth != null;
+      allow create: if request.auth != null;
+    }
+    
+    // Reports collection - authenticated users can create and read
+    match /reports/{reportId} {
+      allow read, create: if request.auth != null;
+    }
+    
+    // Ratings collection - public read, authenticated write
+    match /ratings/{ratingId} {
+      allow read: if true;
+      allow create, update: if request.auth != null;
+    }
+  }
+}
