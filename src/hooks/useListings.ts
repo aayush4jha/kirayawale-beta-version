@@ -135,91 +135,104 @@ export const useListings = (options: UseListingsOptions = {}) => {
     }
   };
 
-  const createListing = async (listingData: Omit<Listing, 'id' | 'created_at' | 'updated_at'>) => {
-    try {
-      console.log('🔄 Creating new listing:', listingData);
-      console.log('🔐 Current auth state:', auth.currentUser?.uid);
-      
-      // Check authentication first
-      if (!auth.currentUser) {
-        throw new Error('You must be signed in to create a listing. Please sign in and try again.');
-      }
-      
-      // Validate required fields
-      if (!listingData.user_id) {
-        throw new Error('User ID is required');
-      }
-      if (!listingData.title?.trim()) {
-        throw new Error('Title is required');
-      }
-      if (!listingData.category) {
-        throw new Error('Category is required');
-      }
-      if (!listingData.description?.trim()) {
-        throw new Error('Description is required');
-      }
-      if (!listingData.price_per_day || listingData.price_per_day <= 0) {
-        throw new Error('Valid price per day is required');
-      }
-      if (!listingData.location?.trim()) {
-        throw new Error('Location is required');
-      }
-      
-      // Ensure user_id matches current user
-      if (listingData.user_id !== auth.currentUser.uid) {
-        throw new Error('User ID mismatch. Please sign out and sign back in.');
-      }
+const CLOUDINARY_UPLOAD_URL = 'https://api.cloudinary.com/v1_1/dtuz2ewtb/image/upload';
+const UPLOAD_PRESET = 'xxxxxx';
 
-      // Prepare data for Firestore
-      const firestoreData = {
-        user_id: listingData.user_id,
-        title: listingData.title.trim(),
-        category: listingData.category,
-        description: listingData.description.trim(),
-        price_per_day: Number(listingData.price_per_day),
-        availability_start_date: listingData.availability_start_date,
-        availability_end_date: listingData.availability_end_date || null,
-        location: listingData.location.trim(),
-        photos: Array.isArray(listingData.photos) ? listingData.photos : [],
-        is_active: true,
-        is_rented: false,
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
-      };
+const uploadToCloudinary = async (file: File): Promise<string> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('upload_preset', UPLOAD_PRESET);
 
-      console.log('📝 Prepared data for Firestore:', firestoreData);
-      
-      const docRef = await addDoc(collection(db, 'listings'), firestoreData);
-      
-      console.log('✅ Listing created with ID:', docRef.id);
-      
-      // Refresh listings after creation
-      setTimeout(() => {
-        fetchListings();
-      }, 1000); // Small delay to ensure Firestore has processed the write
-      
-      return docRef.id;
-    } catch (err: any) {
-      console.error('❌ Error creating listing:', err);
-      
-      let errorMessage = 'Failed to create listing. ';
-      
-      // Handle specific Firebase error codes
-      if (err.code === 'permission-denied' || err.code === 'insufficient-permissions') {
-        errorMessage = 'Permission denied. Please sign out, sign back in, and try again.';
-      } else if (err.code === 'unauthenticated') {
-        errorMessage = 'You must be signed in to create a listing. Please sign in and try again.';
-      } else if (err.code === 'invalid-argument') {
-        errorMessage = 'Invalid data provided. Please check all fields and try again.';
-      } else if (err.code === 'unavailable') {
-        errorMessage = 'Service temporarily unavailable. Please try again in a moment.';
-      } else if (err.message) {
-        errorMessage = err.message;
-      }
-      
-      throw new Error(errorMessage);
+  const res = await fetch(CLOUDINARY_UPLOAD_URL, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!res.ok) {
+    throw new Error('Failed to upload image to Cloudinary');
+  }
+
+  const data = await res.json();
+  return data.secure_url;
+};
+
+const createListing = async (
+  listingData: Omit<Listing, 'id' | 'created_at' | 'updated_at'>
+) => {
+  try {
+    console.log('🔄 Creating new listing:', listingData);
+    console.log('🔐 Current auth state:', auth.currentUser?.uid);
+
+    if (!auth.currentUser) {
+      throw new Error('You must be signed in to create a listing. Please sign in and try again.');
     }
-  };
+
+    // Validation
+    if (!listingData.user_id || listingData.user_id !== auth.currentUser.uid) {
+      throw new Error('User ID mismatch or missing. Please sign in again.');
+    }
+    if (!listingData.title?.trim()) throw new Error('Title is required');
+    if (!listingData.category) throw new Error('Category is required');
+    if (!listingData.description?.trim()) throw new Error('Description is required');
+    if (!listingData.price_per_day || listingData.price_per_day <= 0)
+      throw new Error('Valid price per day is required');
+    if (!listingData.location?.trim()) throw new Error('Location is required');
+
+    // Upload images to Cloudinary
+    const photoUrls: string[] = [];
+
+    if (Array.isArray(listingData.photos)) {
+      for (const photo of listingData.photos) {
+        if (photo instanceof File) {
+          const url = await uploadToCloudinary(photo);
+          photoUrls.push(url);
+        } else if (typeof photo === 'string') {
+          // Already uploaded image URL (optional support)
+          photoUrls.push(photo);
+        }
+      }
+    }
+
+    const firestoreData = {
+      user_id: listingData.user_id,
+      title: listingData.title.trim(),
+      category: listingData.category,
+      description: listingData.description.trim(),
+      price_per_day: Number(listingData.price_per_day),
+      availability_start_date: listingData.availability_start_date,
+      availability_end_date: listingData.availability_end_date || null,
+      location: listingData.location.trim(),
+      photos: photoUrls,
+      is_active: true,
+      is_rented: false,
+      created_at: serverTimestamp(),
+      updated_at: serverTimestamp(),
+    };
+
+    const docRef = await addDoc(collection(db, 'listings'), firestoreData);
+    console.log('✅ Listing created with ID:', docRef.id);
+
+    setTimeout(() => {
+      fetchListings();
+    }, 1000);
+
+    return docRef.id;
+  } catch (err: any) {
+    console.error('❌ Error creating listing:', err);
+    let errorMessage = 'Failed to create listing. ';
+
+    if (err.code === 'permission-denied' || err.code === 'insufficient-permissions') {
+      errorMessage = 'Permission denied. Please sign out, sign back in, and try again.';
+    } else if (err.code === 'unauthenticated') {
+      errorMessage = 'You must be signed in to create a listing.';
+    } else if (err.message) {
+      errorMessage = err.message;
+    }
+
+    throw new Error(errorMessage);
+  }
+};
+
 
   const refetch = () => {
     console.log('🔄 Refetching listings...');
